@@ -61,8 +61,8 @@ IPV6=$(curl -6 -s https://api64.ipify.org 2>/dev/null || true)
 echo "▶ 下载 shadowquic..."
 ARCH=$(uname -m)
 case "$ARCH" in
-  x86_64) FILE="shadowquic-linux-amd64" ;;
-  aarch64) FILE="shadowquic-linux-arm64" ;;
+  x86_64) FILE="shadowquic-x86_64-linux" ;;
+  aarch64) FILE="shadowquic-aarch64-linux" ;;
   *) echo "❌ 不支持架构: $ARCH"; exit 1 ;;
 esac
 
