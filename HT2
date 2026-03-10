@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -e
+
+echo "===== Alpine HY2 + TUIC 双节点安装脚本 ====="
+
+# 安装依赖
+apk update
+apk add --no-cache curl socat xz uuidgen
+
+# 获取手动输入
+read -p "请输入第一个节点的 HY2/TUIC 端口: " NODE1_PORT
+read -p "请输入第一个节点的 UUID: " NODE1_UUID
+read -p "请输入第二个节点的 HY2/TUIC 端口: " NODE2_PORT
+read -p "请输入第二个节点的 UUID: " NODE2_UUID
+
+# 创建配置目录
+mkdir -p /etc/hy2-tuic
+
+# 写入 HY2 配置示例
+cat > /etc/hy2-tuic/hy2-node1.json <<EOF
+{
+  "listen": ":$NODE1_PORT",
+  "uuid": "$NODE1_UUID",
+  "protocol": "hysteria"
+}
+EOF
+
+cat > /etc/hy2-tuic/hy2-node2.json <<EOF
+{
+  "listen": ":$NODE2_PORT",
+  "uuid": "$NODE2_UUID",
+  "protocol": "tuic"
+}
+EOF
+
+# 下载 HY2 + TUIC 可执行文件示例（假设从官方或可靠源）
+echo "下载 HY2/TUIC 可执行文件..."
+curl -L -o /usr/local/bin/hy2 https://example.com/hy2-linux-amd64
+curl -L -o /usr/local/bin/tuic https://example.com/tuic-linux-amd64
+chmod +x /usr/local/bin/hy2 /usr/local/bin/tuic
+
+# 启动节点示例
+echo "启动节点..."
+nohup hy2 -c /etc/hy2-tuic/hy2-node1.json > /var/log/hy2-node1.log 2>&1 &
+nohup tuic -c /etc/hy2-tuic/hy2-node2.json > /var/log/tuic-node2.log 2>&1 &
+
+echo "===== 安装完成 ====="
+echo "HY2 端口: $NODE1_PORT, TUIC 端口: $NODE2_PORT"
