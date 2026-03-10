@@ -1,0 +1,179 @@
+#!/usr/bin/env sh
+# Hysteria2 + TUIC 双协议安装脚本 - 适用于 Alpine Linux
+# 2025/2026 版本适配
+
+set -e
+
+# ==================== 检查 root ====================
+if [ "$(id -u)" != "0" ]; then
+    echo "请使用 root 权限运行此脚本"
+    exit 1
+fi
+
+# ==================== 工作目录和二进制路径 ====================
+WORKDIR="/etc/hysteria"
+BIN="/usr/local/bin/hysteria"
+mkdir -p "$WORKDIR"
+
+echo "========================================"
+echo "   Hysteria2 + TUIC 双协议安装脚本"
+echo "   系统：Alpine Linux"
+echo "========================================"
+
+# ==================== 安装依赖 ====================
+echo "正在更新软件源并安装依赖..."
+apk update
+apk add --no-cache curl openssl ca-certificates
+
+# ==================== 下载最新 Hysteria2 ====================
+echo "正在从 GitHub 下载最新 Hysteria2 二进制文件..."
+
+LATEST_URL="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64"
+
+# 如果你的服务器支持 AVX，可以换成 hysteria-linux-amd64-avx
+# LATEST_URL="https://github.com/apernet/hysteria/releases/latest/download/hysteria-linux-amd64-avx"
+
+curl -L -o "$BIN" "$LATEST_URL" || {
+    echo "下载失败，请检查网络或尝试手动下载："
+    echo "$LATEST_URL"
+    exit 1
+}
+
+chmod +x "$BIN"
+echo "Hysteria2 二进制文件已下载并赋予执行权限"
+
+# ==================== 手动输入配置 ====================
+echo ""
+echo "请手动输入以下配置（直接回车使用默认值）："
+echo ""
+
+printf "Hysteria2 监听端口 [默认: 443]: "
+read -r HY2_PORT
+HY2_PORT=${HY2_PORT:-443}
+
+printf "TUIC 监听端口 [默认: 8443]: "
+read -r TUIC_PORT
+TUIC_PORT=${TUIC_PORT:-8443}
+
+printf "Hysteria2 密码（建议8-16位随机字符） [自动生成]: "
+read -r INPUT_PASSWORD
+if [ -z "$INPUT_PASSWORD" ]; then
+    PASSWORD=$(openssl rand -hex 10)
+    echo "已自动生成密码：$PASSWORD"
+else
+    PASSWORD="$INPUT_PASSWORD"
+fi
+
+printf "TUIC UUID（建议使用 uuidgen 生成） [自动生成]: "
+read -r INPUT_UUID
+if [ -z "$INPUT_UUID" ]; then
+    UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || openssl rand -hex 16)
+    echo "已自动生成 UUID：$UUID"
+else
+    UUID="$INPUT_UUID"
+fi
+
+# ==================== 生成自签名证书 ====================
+echo "正在生成自签名证书（CN=www.bing.com）..."
+
+openssl req -x509 -nodes -newkey rsa:2048 \
+    -keyout "$WORKDIR/server.key" \
+    -out "$WORKDIR/server.crt" \
+    -days 3650 \
+    -subj "/CN=www.bing.com" 2>/dev/null
+
+chmod 600 "$WORKDIR/server.key"
+
+# ==================== 生成配置文件 ====================
+echo "正在生成配置文件..."
+
+cat > "$WORKDIR/config.yaml" <<EOF
+listen: :$HY2_PORT
+
+tls:
+  cert: $WORKDIR/server.crt
+  key: $WORKDIR/server.key
+
+alpn:
+  - h3
+
+auth:
+  type: password
+  password: "$PASSWORD"
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://www.bing.com
+    rewriteHost: true
+
+# TUIC 配置
+tuic:
+  listen: :$TUIC_PORT
+  users:
+    "$UUID": "$PASSWORD"
+  congestion_control: bbr
+EOF
+
+# ==================== 创建 openrc 服务（Alpine 默认使用 openrc） ====================
+echo "正在创建 openrc 服务..."
+
+cat > /etc/init.d/hysteria <<EOF
+#!/sbin/openrc-run
+
+description="Hysteria2 Proxy Server"
+
+command="$BIN"
+command_args="server -c $WORKDIR/config.yaml"
+command_background="yes"
+pidfile="/run/hysteria.pid"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath -d -m 0755 /run
+}
+EOF
+
+chmod +x /etc/init.d/hysteria
+
+# ==================== 启动服务 ====================
+echo "正在启用并启动服务..."
+
+rc-update add hysteria default
+rc-service hysteria restart || {
+    echo "服务启动失败，请检查配置文件：$WORKDIR/config.yaml"
+    echo "你可以手动运行以下命令查看错误："
+    echo "$BIN server -c $WORKDIR/config.yaml"
+    exit 1
+}
+
+# ==================== 输出连接信息 ====================
+echo ""
+echo "========================================"
+echo "          安装完成！"
+echo "========================================"
+echo ""
+
+IP=$(curl -s https://api.ipify.org || curl -s ifconfig.me || echo "你的服务器IP")
+
+echo "Hysteria2 连接信息："
+echo "hy2://$PASSWORD@$IP:$HY2_PORT?sni=www.bing.com&insecure=1#HY2-$(date +%Y%m%d)"
+echo ""
+
+echo "TUIC 连接信息："
+echo "tuic://$UUID:$PASSWORD@$IP:$TUIC_PORT?sni=www.bing.com&insecure=1#TUIC-$(date +%Y%m%d)"
+echo ""
+
+echo "配置文件位置： $WORKDIR/config.yaml"
+echo "证书位置：     $WORKDIR/server.crt / server.key"
+echo ""
+echo "服务管理命令："
+echo "  rc-service hysteria start|stop|restart|status"
+echo "  rc-update add hysteria default    # 开机自启"
+echo ""
+echo "如需修改端口或密码，请编辑 $WORKDIR/config.yaml 后重启服务"
+echo ""
