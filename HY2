@@ -1,132 +1,48 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=============================="
-echo "  HY2 + TUIC 安装脚本 (Alpine)"
-echo "=============================="
+echo "===== Alpine HY2 + TUIC 双节点安装脚本 ====="
 
-# 必须 root
+# 安装依赖
+apk update
+apk add --no-cache curl socat xz uuidgen
 
-if [ "$(id -u)" != "0" ]; then
-echo "请使用 root 运行"
-exit 1
-fi
+# 获取手动输入
+read -p "请输入第一个节点的 HY2/TUIC 端口: " NODE1_PORT
+read -p "请输入第一个节点的 UUID: " NODE1_UUID
+read -p "请输入第二个节点的 HY2/TUIC 端口: " NODE2_PORT
+read -p "请输入第二个节点的 UUID: " NODE2_UUID
 
-# 判断系统
+# 创建配置目录
+mkdir -p /etc/hy2-tuic
 
-if ! command -v apk >/dev/null 2>&1; then
-echo "本脚本仅支持 Alpine Linux"
-exit 1
-fi
-
-echo
-read -p "请输入 HY2 端口: " HY2_PORT
-read -p "请输入 TUIC 端口: " TUIC_PORT
-read -p "请输入 TUIC UUID: " UUID
-
-SERVER_NAME="[www.bing.com](http://www.bing.com)"
-WORKDIR="/etc/hysteria"
-BIN="/usr/local/bin/hysteria"
-
-echo
-echo "安装依赖..."
-apk add --no-cache curl openssl bash ca-certificates
-
-mkdir -p $WORKDIR
-
-echo
-echo "生成 HY2 密码..."
-PASSWORD=$(openssl rand -hex 8)
-
-echo
-echo "获取服务器 IP..."
-IP=$(curl -s https://api.ipify.org)
-
-echo
-echo "下载 hysteria (自动获取最新版本)..."
-
-URL=$(curl -s https://api.github.com/repos/apernet/hysteria/releases/latest 
-| grep hysteria-linux-amd64" 
-| cut -d '"' -f 4)
-
-curl -L -o $BIN $URL
-chmod +x $BIN
-
-echo
-echo "生成自签证书..."
-openssl req -x509 -nodes -newkey rsa:2048 
--keyout $WORKDIR/key.pem 
--out $WORKDIR/cert.pem 
--days 3650 
--subj "/CN=$SERVER_NAME"
-
-echo
-echo "写入配置文件..."
-
-cat > $WORKDIR/config.yaml <<EOF
-listen: :$HY2_PORT
-
-tls:
-cert: $WORKDIR/cert.pem
-key: $WORKDIR/key.pem
-alpn:
-
-* h3
-
-auth:
-type: password
-password: "$PASSWORD"
-
-masquerade:
-type: proxy
-proxy:
-url: https://$SERVER_NAME
-rewriteHost: true
-
-tuic:
-listen: :$TUIC_PORT
-users:
-$UUID: $PASSWORD
-congestion_control: bbr
-EOF
-
-echo
-echo "创建 OpenRC 服务..."
-
-cat > /etc/init.d/hysteria <<'EOF'
-#!/sbin/openrc-run
-
-name="hysteria"
-command="/usr/local/bin/hysteria"
-command_args="server -c /etc/hysteria/config.yaml"
-command_background=true
-pidfile="/run/hysteria.pid"
-
-depend() {
-need net
+# 写入 HY2 配置示例
+cat > /etc/hy2-tuic/hy2-node1.json <<EOF
+{
+  "listen": ":$NODE1_PORT",
+  "uuid": "$NODE1_UUID",
+  "protocol": "hysteria"
 }
 EOF
 
-chmod +x /etc/init.d/hysteria
+cat > /etc/hy2-tuic/hy2-node2.json <<EOF
+{
+  "listen": ":$NODE2_PORT",
+  "uuid": "$NODE2_UUID",
+  "protocol": "tuic"
+}
+EOF
 
-rc-update add hysteria default
-rc-service hysteria start
+# 下载 HY2 + TUIC 可执行文件示例（假设从官方或可靠源）
+echo "下载 HY2/TUIC 可执行文件..."
+curl -L -o /usr/local/bin/hy2 https://example.com/hy2-linux-amd64
+curl -L -o /usr/local/bin/tuic https://example.com/tuic-linux-amd64
+chmod +x /usr/local/bin/hy2 /usr/local/bin/tuic
 
-echo
-echo "=============================="
-echo "安装完成"
-echo
-echo "服务器 IP: $IP"
-echo
-echo "HY2 端口: $HY2_PORT"
-echo "HY2 密码: $PASSWORD"
-echo
-echo "TUIC 端口: $TUIC_PORT"
-echo "TUIC UUID: $UUID"
-echo
-echo "HY2 节点:"
-echo "hy2://$PASSWORD@$IP:$HY2_PORT/?sni=$SERVER_NAME&alpn=h3&insecure=1#HY2"
-echo
-echo "TUIC 节点:"
-echo "tuic://$UUID:$PASSWORD@$IP:$TUIC_PORT?sni=$SERVER_NAME&alpn=h3&insecure=1#TUIC"
-echo "=============================="
+# 启动节点示例
+echo "启动节点..."
+nohup hy2 -c /etc/hy2-tuic/hy2-node1.json > /var/log/hy2-node1.log 2>&1 &
+nohup tuic -c /etc/hy2-tuic/hy2-node2.json > /var/log/tuic-node2.log 2>&1 &
+
+echo "===== 安装完成 ====="
+echo "HY2 端口: $NODE1_PORT, TUIC 端口: $NODE2_PORT"
